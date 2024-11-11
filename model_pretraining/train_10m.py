@@ -223,85 +223,117 @@ def training_epoch(model, ema_model, train_dataloader, valid_dataloader, optimiz
     model = model.train()
     optimizer.zero_grad(set_to_none=True)
 
-    num_steps = min(len(train_dataloader), args.max_steps - global_step)
+    # calculate the number of steps to perform in this epoch
+    num_steps = min(len(train_dataloader), (args.max_steps - global_step) * args.accumulate_steps)
+
+    # initialize the dataloader and the metrics
     train_dataloader = iter(train_dataloader)
+    total_loss, total_accuracy, total_z_loss, total_mask_p, total_grad_norm = 0.0, 0.0, 0.0, 0.0, 0.0
+
+    # get the first batch
     input_ids_, attention_mask_, target_ids_, mask_p_ = get_batch(train_dataloader, args.device, global_step)
+
+    # iterate over the steps
     for local_step in tqdm(range(num_steps), desc="Train iteration", initial=global_step, total=args.max_steps, disable=not is_main_process()):
-        
         input_ids, attention_mask, target_ids, mask_p = input_ids_, attention_mask_, target_ids_, mask_p_
+
+        # forward pass, do a more detailed check of the model every 100 steps
         with torch.cuda.amp.autocast(args.mixed_precision, dtype=torch.bfloat16):
             with ModelLogger(enable=global_step % 100 == 0, module=model):
                 loss, accuracy, z_loss, num_tokens = model(input_ids, attention_mask, target_ids)
 
+        # get the next batch
         if local_step < num_steps - 1: 
             input_ids_, attention_mask_, target_ids_, mask_p_ = get_batch(train_dataloader, args.device, global_step)
 
-        total_tokens = torch.tensor(num_tokens, device=args.device, dtype=torch.long)
-        torch.distributed.all_reduce(total_tokens, torch.distributed.ReduceOp.SUM)
-
+        # calculate the weight for the loss (either token-weighted or not)
         if args.token_weighted_loss:
+            total_tokens = torch.tensor(num_tokens, device=args.device, dtype=torch.long)
+            torch.distributed.all_reduce(total_tokens, torch.distributed.ReduceOp.SUM)
             weight = args.world_size * num_tokens / total_tokens / args.accumulate_steps
         else:
             weight = 1.0 / args.accumulate_steps
 
+        # backward pass through both losses
         ((loss + args.z_loss_weight * z_loss) * weight).backward()
 
+        # add the tracked metrics (for gradient accumulation)
+        total_loss += loss.detach() * weight
+        total_accuracy += accuracy * weight
+        total_z_loss += z_loss * weight
+        total_mask_p += mask_p * weight
+
+        # gradient accumulation -- if we have accumulated enough gradients, we can perform the optimizer step; otherwise, we just continue and backpropagate through the next batch
         if (local_step + 1) % args.accumulate_steps != 0:
             continue
 
-        grad_norm = nn.utils.clip_grad_norm_(model.parameters(), args.max_gradient)
+        # clip the gradients
+        total_grad_norm += nn.utils.clip_grad_norm_(model.parameters(), args.max_gradient) * weight
 
+        # optimizer step
         optimizer.step()
         scheduler.step()
 
         with torch.no_grad():
+
+            # EMA update
             for param_q, param_k in zip(model.module.parameters(), ema_model.parameters()):
                 param_k.data.mul_(args.ema_decay).add_((1.0 - args.ema_decay) * param_q.detach().data)
 
+            # be careful here, not all GPUs work with the same training objective
             if args.dataset_type == "masked":
-                mlm_loss = loss.detach() / (args.hybrid_numerator / args.hybrid_denominator)
-                clm_loss = torch.zeros_like(mlm_loss)
+                total_mlm_loss = total_loss / (args.hybrid_numerator / args.hybrid_denominator)
+                total_clm_loss = torch.zeros_like(total_mlm_loss)
+                total_mask_p = total_mask_p / (args.hybrid_numerator / args.hybrid_denominator)
             else:
-                clm_loss = loss.detach() / (1 - args.hybrid_numerator / args.hybrid_denominator)
-                mlm_loss = torch.zeros_like(clm_loss)
-            
-            metrics = torch.stack([loss * weight, accuracy * weight, z_loss * weight, mask_p, mlm_loss, clm_loss])
-            torch.distributed.all_reduce(metrics, torch.distributed.ReduceOp.AVG)
-            loss, accuracy, z_loss, mask_p, mlm_loss, clm_loss = metrics.tolist()
+                total_clm_loss = total_loss / (1 - args.hybrid_numerator / args.hybrid_denominator)
+                total_mlm_loss = torch.zeros_like(total_clm_loss)
+                total_mask_p = torch.zeros_like(total_mask_p)
 
+            # accumulate the metrics across GPUs
+            metrics = torch.stack([total_loss, total_accuracy, total_z_loss, total_mask_p, total_mlm_loss, total_clm_loss])
+            torch.distributed.all_reduce(metrics, torch.distributed.ReduceOp.AVG)
+            total_loss, total_accuracy, total_z_loss, total_mask_p, total_mlm_loss, total_clm_loss = metrics.tolist()
+
+        # log the metrics
         if is_main_process():
             wandb.log(
                 {
                     "epoch": epoch,
-                    "train/loss": loss,
-                    "train/z_loss": z_loss,
-                    "train/perplexity": math.exp(loss),
-                    "train/accuracy": accuracy * 100.0,
-                    "train/mlm_loss": mlm_loss,
-                    "train/clm_loss": clm_loss,
+                    "train/loss": total_loss,
+                    "train/z_loss": total_z_loss,
+                    "train/perplexity": math.exp(total_loss),
+                    "train/accuracy": total_accuracy * 100.0,
+                    "train/mlm_loss": total_mlm_loss,
+                    "train/clm_loss": total_clm_loss,
                     "stats/learning_rate": optimizer.param_groups[0]['lr'],
-                    "stats/grad_norm": grad_norm,
+                    "stats/grad_norm": total_grad_norm,
                     "stats/seq_length": args.seq_length,
                     "stats/global_batch_size": args.current_global_batch_size,
                     "stats/local_batch_size": args.current_local_batch_size,
                     "stats/accumulate_steps": args.accumulate_steps,
-                    "stats/mask_p": mask_p,
+                    "stats/mask_p": total_mask_p,
                 },
                 commit=False
             )
 
+        # zero the accumulated gradients and the metrics
         optimizer.zero_grad(set_to_none=True)
+        total_loss, total_accuracy, total_z_loss, total_mask_p, total_grad_norm = 0.0, 0.0, 0.0, 0.0, 0.0
 
+        # checkpoint the model and the full training state
         if global_step % args.save_every == 0:
             save(model, ema_model, optimizer, scheduler, global_step, epoch, args)
-            
+        
+        # validate the model
         if (global_step + 1) % args.validate_every == 0:
             validation_epoch(model, valid_dataloader, epoch, args)
             model.train()
 
+        # log the stats and commit
         if is_main_process():
             wandb.log({"global_step": global_step}, commit=True)
-        
+
         global_step += 1
 
         # Exiting the training due to hitting max steps
@@ -321,8 +353,7 @@ def validation_epoch(model, valid_dataloader, epoch, args, commit=False):
     for local_step in tqdm(range(args.validation_steps), desc="Valid iteration", disable=not is_main_process()):
 
         with torch.cuda.amp.autocast(args.mixed_precision, dtype=torch.bfloat16):
-            with ModelLogger(enable=global_step % 100 == 0, module=model):
-                loss, accuracy, _, num_tokens = model(input_ids, attention_mask, target_ids)
+            loss, accuracy, _, num_tokens = model(input_ids, attention_mask, target_ids)
 
         if local_step < args.validation_steps - 1:
             input_ids, attention_mask, target_ids, _ = get_batch(valid_dataloader, args.device, 0)
