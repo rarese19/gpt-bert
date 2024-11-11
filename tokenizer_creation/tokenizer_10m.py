@@ -98,7 +98,6 @@ def calculate_stats(tokenizer, args):
     f_95 = sorted_subwords[len(sorted_subwords) * 95 // 100][1]
 
     print(f"F_{{95%}} is {f_95}\n")
-    print(f"Renyi score is {renyi_score}\n")
 
     with open(f"{args.vocab_path[:-5]}_stats.txt", "w") as f:
         f.write(f"Vocabulary size: {args.vocab_size}\n")
@@ -117,13 +116,14 @@ if __name__ == "__main__":
     parser.add_argument('--min_frequency', type=int, default=10, help='Minimal number of occurences of every candidate subword')
     args = parser.parse_args()
 
-    print(f"Initializing a BPE tokenizer", flush=True)
+    print("Initializing a BPE tokenizer", flush=True)
     tokenizer, trainer = initialize_tokenizer(args)
 
     print("Training the tokenizer", flush=True)
+
     def iterator(file_path: str):
         for line in tqdm(open(file_path)):
-            text = json.loads(line).strip()
+            # text = json.loads(line).strip()
             if len(line) == 0:
                 continue
             yield line

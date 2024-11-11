@@ -5,6 +5,7 @@ from tqdm import tqdm
 from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
 from tokenizers import Tokenizer, pre_tokenizers, decoders, normalizers, Regex, processors
+from pathlib import Path
 
 
 def initialize_tokenizer(args):
@@ -74,7 +75,7 @@ def initialize_tokenizer(args):
 def calculate_stats(tokenizer, args):
     counter, n_words = Counter(), 0
     all_tokens = []
-    for i, document in enumerate(open(f"{args.validation_path}")):
+    for i, document in enumerate(args.validation_path.open("r")):
         text = json.loads(document).strip()
         if len(text) > 0:
             n_words += len(text.split())
@@ -99,7 +100,7 @@ def calculate_stats(tokenizer, args):
 
     print(f"F_{{95%}} is {f_95}\n")
 
-    with open(f"{args.vocab_path[:-5]}_stats.txt", "w") as f:
+    with open(f"{args.vocab_path.with_suffix('')}_stats.txt", "w") as f:
         f.write(f"Vocabulary size: {args.vocab_size}\n")
         f.write(f"Average splits per word: {n_subwords / n_words:.3f}\n")
         f.write(f"F_{{95%}} is {f_95}\n")
@@ -108,10 +109,10 @@ def calculate_stats(tokenizer, args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='BERT sharding')
-    parser.add_argument('--input_path', type=str, default="../data/babycosmofine_100M.jsonl", help='Specify the input filename')
-    parser.add_argument('--validation_path', type=str, default="../data/babycosmofine_100M.jsonl", help='Specify the validation filename')
-    parser.add_argument('--vocab_path', type=str, default="../tokenizers/tokenizer_100M.json", help='Specify the output filename')
+    parser = argparse.ArgumentParser(description='Tokenizer creation')
+    parser.add_argument('--input_path', type=Path, default="../data/babycosmofine_100M.jsonl", help='Specify the input filename')
+    parser.add_argument('--validation_path', type=Path, default="../data/babycosmofine_100M.jsonl", help='Specify the validation filename')
+    parser.add_argument('--vocab_path', type=Path, default="../tokenizers/tokenizer_100M.json", help='Specify the output filename')
     parser.add_argument('--vocab_size', type=int, default=2**14, help='Number of subwords in the trained tokenizer')
     parser.add_argument('--min_frequency', type=int, default=10, help='Minimal number of occurences of every candidate subword')
     args = parser.parse_args()
@@ -121,8 +122,8 @@ if __name__ == "__main__":
 
     print("Training the tokenizer", flush=True)
 
-    def iterator(file_path: str):
-        for line in tqdm(open(file_path)):
+    def iterator(file_path: Path):
+        for line in tqdm(file_path.open("r")):
             # text = json.loads(line).strip()
             if len(line) == 0:
                 continue
@@ -131,17 +132,17 @@ if __name__ == "__main__":
     tokenizer.train_from_iterator(iterator(args.input_path), trainer)
 
     print("Saving the tokenizer", flush=True)
-    tokenizer.save(args.vocab_path)
+    tokenizer.save(str(args.vocab_path))
 
-    with open(args.vocab_path) as f:
+    with args.vocab_path.open("r") as f:
         tokenizer_json = json.load(f)
     tokenizer_json["added_tokens"] = tokenizer_json["added_tokens"][:-256]
-    with open(args.vocab_path, "w") as f:
+    with args.vocab_path.open("w") as f:
         json.dump(tokenizer_json, f, ensure_ascii=False, indent=4)
 
     print("TEST")
     print("Trying to load the tokenizer...")
-    tokenizer = Tokenizer.from_file(args.vocab_path)
+    tokenizer = Tokenizer.from_file(str(args.vocab_path))
     print("Success!")
 
     calculate_stats(tokenizer, args)
