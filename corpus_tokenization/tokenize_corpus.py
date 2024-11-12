@@ -14,9 +14,10 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_folder", type=Path, default="../data")
     parser.add_argument("--train_file", type=Path, default="train_100M.jsonl")
-    parser.add_argument("--valid_file", type=Path, default="dev.jsonl")
+    parser.add_argument("--valid_file", type=Path, default=None)
     parser.add_argument("--tokenizer_folder", type=Path, default="../tokenizers")
     parser.add_argument("--tokenizer_file", type=Path, default="tokenizer_100M.json")
+    parser.add_argument("--name", type=str, default=None)
     return parser.parse_args()
 
 
@@ -51,15 +52,19 @@ def tokenize_file(input_filename, output_filename, tokenizer):
 if __name__ == "__main__":
     args = parse_args()
 
+    name = f"_{args.name}" if args.name is not None else ""
+
     tokenizer_path = args.tokenizer_folder / args.tokenizer_file
     input_train_path = args.data_folder / args.train_file
-    input_valid_path = args.data_folder / args.valid_file
 
     # load the tokenizer
     tokenizer = Tokenizer.from_file(str(tokenizer_path))
 
-    output_train_path = input_train_path.with_name(f"{input_train_path.stem}_tokenized.bin")
-    output_valid_path = input_valid_path.with_name(f"{input_valid_path.stem}_tokenized.bin")
+    output_train_path = input_train_path.with_name(f"{input_train_path.stem}{name}_tokenized.bin")
 
     tokenize_file(input_train_path, output_train_path, tokenizer)
-    tokenize_file(input_valid_path, output_valid_path, tokenizer)
+
+    if args.valid_file is not None:
+        input_valid_path = args.data_folder / args.valid_file
+        output_valid_path = input_valid_path.with_name(f"{input_valid_path.stem}{name}_tokenized.bin")
+        tokenize_file(input_valid_path, output_valid_path, tokenizer)

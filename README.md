@@ -48,10 +48,10 @@ Completed files/folders:
 - tokenizer_creation
 - pretraining
 - configs
+- corpus_tokenization
 
 Incomplete files/folders:
 
-- corpus_tokenization (Missing README.md)
 - evaluation
 
 Missing files:
