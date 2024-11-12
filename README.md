@@ -77,7 +77,7 @@ _______
 This is will be a general guide to pretraining the model, to find out what files to run and what they do, each subfolder will contain a README detailing its content.
 
 1. (optional) If you do not have a tokenizer, or want to create a custom one, run the script(s) found in `tokenizer_creation`. The created tokenizers will be saved in `tokenizers` (unless otherwise specified). 
-2. To tokenize the corpus, run the script in `corpus_tokenization`. The tokenized data will be saved in the folder `data` (unless otherwise specified). We tokenize before training for efficiency, but in the case this is not wanted, code will need to be apated in the scripts found in `pretraining`.
+2. To tokenize the corpus, run the script in `corpus_tokenization`. The tokenized data will be saved in the folder `data` (unless otherwise specified). We tokenize before training for efficiency, but in the case this is not wanted, code will need to be adapted in the scripts found in `pretraining` (specifically the `dataset.py` file).
 3. Create a config file for your model in the same style as the ones found in the `configs` folder. Otherwise, choose one of the pre-created ones.
 4. To pre-train your model, run one of the `train_*.py` scripts found in the `pretraining` folder. (More details found in the folder itself)
 5. (optional) If you want to evaluate your model based on the evaluations used in the paper, the different tasks and code to run the evaluation can be found in `evaluation`. Note: to be able to use each part independently of another, the model file is also included in each benchmark folder.
