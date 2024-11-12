@@ -22,12 +22,12 @@ export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
 export MASTER_PORT=9999
 export WORLD_SIZE=$SLURM_NTASKS
 
-CONTAINER="/scratch/project_465000498/HPLT-WP4/pytorch-lumi_sles-rocm-5.5.1-python-3.10-pytorch-v2.0.1-apex-torchvision-torchdata-torchtext-torchaudio.sif"
-SING_BIND="/pfs/lustrep1/scratch/project_465000144"
+CONTAINER="CONTAINER_LOCATION"
+SING_BIND="SINGULARITY_BINDING"
 
 set -euo pipefail
 
-CMD="train_100m.py"
+CMD="train_multi_gpu.py"
 
 echo $CMD
 echo "START $SLURM_JOBID: $(date)"

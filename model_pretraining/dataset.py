@@ -16,7 +16,7 @@ class SpanMaskingStrategy:
 
         span_lengths = torch.randint(1, self.max_span_length + 1, size=(length,), dtype=torch.int)
         cumsum = torch.cumsum(span_lengths, dim=0)
-        
+
         total_length = cumsum[-1].item()
         indices = torch.zeros(total_length, dtype=torch.int)
         indices[cumsum - span_lengths] = torch.arange(length, dtype=torch.int)
@@ -25,7 +25,7 @@ class SpanMaskingStrategy:
 
         max_index = indices[-1].item()
         span_random_numbers_1, span_random_numbers_2 = torch.rand([(max_index + 1) * 2]).chunk(2)
-        
+
         mask_ratios = span_random_numbers_1[indices]
 
         if counts is not None:
@@ -183,7 +183,7 @@ class MaskedDataset(torch.utils.data.Dataset):
         attention_mask = attention_mask[:-1, :-1]
 
         return input_ids, target_ids, attention_mask, real_mask_p
-    
+
     def set_global_step(self, global_step):
         self.global_step = global_step
 
@@ -311,7 +311,7 @@ class CausalDataset(torch.utils.data.Dataset):
         attention_mask = attention_mask[:-1, :-1]
 
         return input_ids, target_ids, attention_mask, torch.zeros([])
-    
+
     def set_global_step(self, global_step):
         self.global_step = global_step
 
@@ -388,15 +388,11 @@ class ValidationDataset(torch.utils.data.Dataset):
         attention_mask = attention_mask[:-1, :-1]
 
         return input_ids, target_ids, attention_mask, real_mask_p
-    
-    def set_global_step(self, global_step):
-        pass
 
     def apply_mask(self, input_ids, mask_ratios, replacement_ids):
         mask_p = 0.15
         mask_p = torch.topk(mask_ratios, max(1, int(mask_ratios.size(0) * mask_p + 0.5)), largest=False).values.max().item()
 
-        # TODO: change to greater or equal
         mask = mask_ratios < mask_p
         target_ids = torch.where(mask, input_ids, -100)
         input_ids = torch.where(mask, replacement_ids, input_ids)

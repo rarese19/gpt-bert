@@ -4,7 +4,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import _softmax_backward_data as _softmax_backward_data
-from torch.utils import checkpoint
 
 
 class Bert(nn.Module):
@@ -249,7 +248,6 @@ class Attention(nn.Module):
         query, key = self.in_proj_qk(hidden_states).chunk(2, dim=2)  # shape: [T, B, D]
         value, gate = self.in_proj_vg(hidden_states).chunk(2, dim=2)  # shape: [T, B, D]
         gate = F.gelu(gate)
-
 
         pos = self.in_proj_qk(self.dropout(relative_embedding))  # shape: [2T-1, 2D]
         pos = F.embedding(self.position_indices[:query_len, :key_len], pos)  # shape: [T, T, 2D]

@@ -4,7 +4,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import _softmax_backward_data as _softmax_backward_data
-from torch.utils import checkpoint
 
 
 class Bert(nn.Module):

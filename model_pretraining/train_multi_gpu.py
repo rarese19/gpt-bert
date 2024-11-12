@@ -11,6 +11,7 @@ from statistics import mean
 import json
 import math
 import copy
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -31,13 +32,15 @@ if int(os.environ["SLURM_PROCID"]) == 0:
 def parse_arguments():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--train_path", default="../data/train_10M_tokenized.bin", type=str, help="Path to the training data.")
-    parser.add_argument("--valid_path", default="../data/dev_10M_tokenized.bin", type=str, help="Path to the validation data.")
-    parser.add_argument("--name", default="small_15-16_babylm_10M", type=str, help="Name of the run.")
-    parser.add_argument("--config_file", default="../configs/small.json", type=str, help="The BERT model config")
-    parser.add_argument("--tokenizer_path", default="../tokenizers/tokenizer_10M.json", type=str, help="Path to the tokenizer.")
-    parser.add_argument("--output_dir", default="../checkpoints", type=str, help="The output directory where the model checkpoints will be written.")
-    parser.add_argument("--checkpoint_filename", default=None, type=str, help="The checkpoint filename to resume training.")
+    parser.add_argument("--train_path", default="../data/train_100M_tokenized.bin", type=Path, help="Path to the training data.")
+    parser.add_argument("--valid_path", default="../data/dev_100M_tokenized.bin", type=Path, help="Path to the validation data.")
+    parser.add_argument("--name", default="hybrid_100M", type=str, help="Name of the run.")
+    parser.add_argument("--wandb_project", default="YOUR_WANDB_PROJECT_NAME", type=str, help="Name of the WandB project to log into.")
+    parser.add_argument("--wandb_entity", default="YOUR_WANDB_ENTITY", type=str, help="The entity to log to on WandB (typically your wandb username).")
+    parser.add_argument("--config_file", default="../configs/base.json", type=Path, help="The BERT model config")
+    parser.add_argument("--tokenizer_path", default="../tokenizers/tokenizer_100M.json", type=Path, help="Path to the tokenizer.")
+    parser.add_argument("--output_dir", default="../checkpoints", type=Path, help="The output directory where the model checkpoints will be written.")
+    parser.add_argument("--checkpoint_filename", default=None, type=Path, help="The checkpoint filename to resume training.")
     parser.add_argument("--optimizer", default="lamb", type=str, help="The optimizer to use.")
     parser.add_argument("--hybrid_numerator", default=15, type=int, help="The numerator of the hybrid ratio.")
     parser.add_argument("--hybrid_denominator", default=16, type=int, help="The denominator of the hybrid ratio (the number of GPUs should be divisible by this number).")
@@ -45,8 +48,8 @@ def parse_arguments():
     parser.add_argument("--local_batch_size", default=256, type=int, help="Batch size for training per GPU.")
     parser.add_argument("--global_batch_size", default=32768, type=int, help="Total batch size for training per GPUs and per grad accumulation step.")
     parser.add_argument("--batch_reduction", default=4, type=int, help="The initial batch size reduction factor.")
-    parser.add_argument("--learning_rate", default=1.41e-2, type=float, help="The initial learning rate for Adam.")
-    parser.add_argument("--max_steps", default=31_250 // 4, type=int, help="Total number of training steps to perform.")
+    parser.add_argument("--learning_rate", default=1e-2, type=float, help="The initial learning rate for Adam.")
+    parser.add_argument("--max_steps", default=31_250 // 2, type=int, help="Total number of training steps to perform.")
     parser.add_argument("--ema_decay", default=0.999, type=float, help="Exponential moving average decay.")
     parser.add_argument("--validate_every", default=1_000, type=int, help="Run validation after every X training shards.")
     parser.add_argument("--validation_steps", default=1, type=int, help="Number of validation steps.")
@@ -70,7 +73,8 @@ def parse_arguments():
     parser.add_argument('--token_weighted_loss', default=False, action=argparse.BooleanOptionalAction, help="Use token weighted loss.")
     args = parser.parse_args()
 
-    args.output_path = f"{args.output_dir}/{args.name}.bin"
+    args.name = "_".join([args.name, str(args.hybrid_numerator), str(args.hybrid_denominator)])
+    args.output_path = (args.output_dir / args.name).with_suffix(".bin")
 
     return args
 
@@ -116,13 +120,13 @@ def setup_training(args, tokenizer):
     if is_main_process():
         wandb.init(
             name=args.name,
-            project="BabyLM-v2",
-            entity="nor-ret"
+            project=args.wandb_project,
+            entity=args.wandb_entity
         )
 
 
 def load_config(args):
-    with open(args.config_file, "r") as f:
+    with args.config_file.open("r") as f:
         config = json.load(f)
     for k, v in config.items():
         setattr(args, k, v)
@@ -462,7 +466,7 @@ def load_datasets(args, tokenizer, epoch, global_step, train_dataloader, valid_d
 if __name__ == "__main__":
     args = parse_arguments()
 
-    tokenizer = Tokenizer.from_file(args.tokenizer_path)
+    tokenizer = Tokenizer.from_file(str(args.tokenizer_path))
     setup_training(args, tokenizer)
     model, ema_model, optimizer, scheduler, global_step, start_epoch = prepare_model_and_optimizer(args)
 

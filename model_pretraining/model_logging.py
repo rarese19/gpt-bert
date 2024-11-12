@@ -1,7 +1,5 @@
 import os
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from utils import is_main_process
 
 
@@ -68,7 +66,7 @@ class ModelLogger:
                 },
                 commit=False
             )
-    
+
     @torch.no_grad()
     def _log_gradients_histograms(self):
         for name, param in self.module.named_parameters():
@@ -85,7 +83,7 @@ class ModelLogger:
     def __exit__(self, *args, **kwargs):
         if not self.enable:
             return
-        
+
         if is_main_process():
             self._log_activations()
             self._log_parameter_histograms()

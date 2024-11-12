@@ -24,13 +24,16 @@ This repository contains code for pre-training BERT models using a hybrid approa
 The main training script supports numerous configuration options. Here's how to use it:
 
 ```bash
-python train.py \
+python train_multi_gpu.py \
     --train_path="PATH_TO_TRAINING_DATA" \
     --valid_path="PATH_TO_VALIDATION_DATA" \
     --config_file="PATH_TO_MODEL_CONFIG" \
     --tokenizer_path="PATH_TO_TOKENIZER" \
     --output_dir="PATH_TO_SAVE_CHECKPOINTS" \
+    # WandB information + model name
     --name="RUN_NAME" \
+    --wandb_project="YOUR_WANDB_PROJECT_NAME" \
+    --wandb_entity="YOUR_WANDB_ENTITY" \
     # Training Configuration
     --hybrid_numerator=15 \
     --hybrid_denominator=16 \
@@ -99,7 +102,7 @@ Comprehensive metrics are tracked including:
 The code requires:
 - PyTorch with CUDA support
 - SLURM for distributed training
-- Wandb for experiment tracking
+- Wandb for experiment tracking (The code is quite intertwined with WandB integration)
 - HuggingFace Tokenizers
 
 ### Data Preparation
@@ -129,7 +132,7 @@ The training script saves:
 
 Training progress is logged to Wandb with:
 - Separate tracking for MLM and CLM losses
-- Validation metrics every N steps
+- Validation metrics every N steps (Validation is done in an MNTP fashion and not a causal fashion)
 - Resource utilization statistics
 - Hyperparameter tracking
 

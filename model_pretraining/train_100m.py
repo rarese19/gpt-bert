@@ -14,7 +14,6 @@ import copy
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.nn.parallel import DistributedDataParallel
 
@@ -93,7 +92,7 @@ def setup_training(args, tokenizer):
         args.dataset_type = "masked"
     else:
         args.dataset_type = "causal"
-    
+
     print(f"Dataset type: {args.dataset_type}", flush=True)
 
     seed_everything(args.seed + args.rank)
@@ -120,6 +119,7 @@ def setup_training(args, tokenizer):
             project="BabyLM-v2",
             entity="nor-ret"
         )
+
 
 def load_config(args):
     with open(args.config_file, "r") as f:
@@ -174,7 +174,7 @@ def prepare_model_and_optimizer(args):
             betas=(args.optimizer_beta1, args.optimizer_beta2),
             eps=args.optimizer_eps,
         )
- 
+
     scheduler = cosine_schedule_with_warmup_cooldown(
         optimizer,
         int(args.max_steps * args.warmup_proportion),
@@ -243,7 +243,7 @@ def training_epoch(model, ema_model, train_dataloader, valid_dataloader, optimiz
                 loss, accuracy, z_loss, num_tokens = model(input_ids, attention_mask, target_ids)
 
         # get the next batch
-        if local_step < num_steps - 1: 
+        if local_step < num_steps - 1:
             input_ids_, attention_mask_, target_ids_, mask_p_ = get_batch(train_dataloader, args.device, global_step)
 
         # calculate the weight for the loss (either token-weighted or not)
@@ -289,7 +289,7 @@ def training_epoch(model, ema_model, train_dataloader, valid_dataloader, optimiz
                 total_clm_loss = total_loss / (1 - args.hybrid_numerator / args.hybrid_denominator)
                 total_mlm_loss = torch.zeros_like(total_clm_loss)
                 total_mask_p = torch.zeros_like(total_mask_p)
-            
+
             # accumulate the metrics across GPUs
             metrics = torch.stack([total_loss, total_accuracy, total_z_loss, total_mask_p, total_mlm_loss, total_clm_loss])
             torch.distributed.all_reduce(metrics, torch.distributed.ReduceOp.AVG)
@@ -324,7 +324,7 @@ def training_epoch(model, ema_model, train_dataloader, valid_dataloader, optimiz
         # checkpoint the model and the full training state
         if global_step % args.save_every == 0:
             save(model, ema_model, optimizer, scheduler, global_step, epoch, args)
-        
+
         # validate the model
         if (global_step + 1) % args.validate_every == 0:
             validation_epoch(model, valid_dataloader, epoch, args)
@@ -361,7 +361,7 @@ def validation_epoch(model, valid_dataloader, epoch, args, commit=False):
         total_tokens = torch.tensor(num_tokens, device=args.device, dtype=torch.long)
         torch.distributed.all_reduce(total_tokens, torch.distributed.ReduceOp.SUM)
         weight = args.world_size * num_tokens / total_tokens
-        
+
         metrics = torch.stack([loss * weight, accuracy * weight])
         torch.distributed.all_reduce(metrics, torch.distributed.ReduceOp.AVG)
         loss, accuracy = metrics.tolist()
