@@ -18,22 +18,48 @@ class Bert(nn.Module):
         contextualized_embeddings = self.transformer(static_embeddings, attention_mask.unsqueeze(1), relative_embedding)
         return contextualized_embeddings
 
-    def forward(self, input_ids, attention_mask, masked_lm_labels=None):
+    def forward(self, input_ids, attention_mask, masked_lm_labels, num_masked=None, ratio=None):
         contextualized_embeddings = self.get_contextualized(input_ids, attention_mask)
-        subword_prediction = self.classifier(contextualized_embeddings, masked_lm_labels)
 
-        gold_labels = masked_lm_labels.flatten()
-        gold_labels = gold_labels[gold_labels != -100]
+        if num_masked is None:
+            subword_prediction = self.classifier(contextualized_embeddings, masked_lm_labels, num_masked)
 
-        loss = F.cross_entropy(subword_prediction, gold_labels, reduction="none").mean()
-        z_loss = torch.logsumexp(subword_prediction, dim=-1).pow(2).mean()
+            gold_labels = masked_lm_labels.flatten()
+            gold_labels = gold_labels[gold_labels != -100]
 
-        with torch.no_grad():
-            accuracy = (subword_prediction.argmax(-1) == gold_labels).float().mean()
+            loss = F.cross_entropy(subword_prediction, gold_labels, reduction="none").mean()
+            z_loss = torch.logsumexp(subword_prediction, dim=-1).pow(2).mean()
 
-        num_tokens = gold_labels.size(0)
+            with torch.no_grad():
+                accuracy = (subword_prediction.argmax(-1) == gold_labels).float().mean()
 
-        return loss, accuracy, z_loss, num_tokens
+            num_tokens = gold_labels.size(0)
+
+            return loss, accuracy, z_loss, num_tokens
+        else:
+            masked_subword_prediction, causal_subword_prediction = self.classifier(contextualized_embeddings, masked_lm_labels, num_masked)
+
+            masked_gold_labels = gold_labels[:, :num_masked].flatten()
+            masked_gold_labels = masked_gold_labels[masked_gold_labels != -100]
+            causal_gold_labels = gold_labels[:, num_masked:].flatten()
+            causal_gold_labels = causal_gold_labels[causal_gold_labels != -100]
+
+            masked_loss = F.cross_entropy(masked_subword_prediction, masked_gold_labels)
+            causal_loss = F.cross_entropy(causal_subword_prediction, causal_gold_labels)
+            loss = ratio * masked_loss + (1 - ratio) * causal_loss
+
+            masked_z_loss = torch.logsumexp(masked_subword_prediction, dim=-1).pow(2).mean()
+            causal_z_loss = torch.logsumexp(causal_subword_prediction, dim=-1).pow(2).mean()
+            z_loss = ratio * masked_z_loss + (1 - ratio) * causal_z_loss
+
+            with torch.no_grad():
+                masked_accuracy = (masked_subword_prediction.argmax(-1) == gold_labels).float().mean()
+                causal_accuracy = (causal_subword_prediction.argmax(-1) == gold_labels).float().mean()
+                accuracy = ratio * masked_accuracy + (1 - ratio) * causal_accuracy
+
+            num_tokens = masked_gold_labels.size(0) + causal_gold_labels.size(0)
+
+            return loss, masked_loss, causal_loss, accuracy, masked_accuracy, causal_accuracy, z_loss, num_tokens
 
 
 # From https://github.com/epfml/DenseFormer
@@ -133,11 +159,21 @@ class MaskClassifier(nn.Module):
         self.nonlinearity[1].bias.data.zero_()
         self.nonlinearity[-1].bias.data.zero_()
 
-    def forward(self, x, masked_lm_labels=None):
-        if masked_lm_labels is not None:
+    def forward(self, x, masked_lm_labels, num_masked=None):
+        if num_masked is None:
             x = torch.index_select(x.flatten(0, 1), 0, torch.nonzero(masked_lm_labels.flatten() != -100).squeeze())
-        x = self.nonlinearity(x)
-        return x
+            x = self.nonlinearity(x)
+            return x
+        else:
+            masked_x, causal_x = torch.tensor_split(x, (num_masked,), dim=1)
+            mntp_masked_lm_labels, causal_masked_lm_labels = torch.tensor_split(masked_lm_labels, (num_masked,), dim=1)
+
+            masked_x = torch.index_select(masked_x.flatten(0, 1), 0, torch.nonzero(mntp_masked_lm_labels.flatten() != -100).squeeze())
+            causal_x = torch.index_select(causal_x.flatten(0, 1), 0, torch.nonzero(causal_masked_lm_labels.flatten() != -100).squeeze())
+
+            masked_x = self.nonlinearity(masked_x)
+            causal_x = self.nonlinearity(causal_x)
+            return masked_x, causal_x
 
 
 class GeGLU(nn.Module):

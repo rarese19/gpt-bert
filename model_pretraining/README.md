@@ -68,7 +68,7 @@ The code implements a hybrid training approach where:
 - The remaining GPUs train with CLM
 - Losses are automatically weighted and combined based on the ratio
 
-Important note: the current code assumes multi-GPU training! For example, if you want to train with a 1:3 causal-to-mask ratio, you have to have at least 4 GPUs.
+Important note: the current code assumes multi-GPU training! For example, if you want to train with a 1:3 causal-to-mask ratio, you have to have at least 4 GPUs. You need your number of GPUs to be a multiple of your `hybrid_denominator`.
 
 ### Dynamic Scheduling
 
@@ -84,6 +84,8 @@ The model follows the BERT architecture with:
 - Configurable model dimensions via config file
 - Optional token-weighted loss computation
 - Z-loss regularization option
+- `model.py` contains the base LTG-BERT architecture model
+- `model_extra.py` contains the model architecture from the paper
 
 ### Validation and Monitoring
 

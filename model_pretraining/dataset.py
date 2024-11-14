@@ -69,9 +69,9 @@ class RandomIndex:
 
 
 class MaskedDataset(torch.utils.data.Dataset):
-    def __init__(self, input_file: str, tokenizer, args, rank, world_size):
+    def __init__(self, input_file: str, tokenizer, args, seq_length, rank, world_size):
         self.path = input_file
-        self.seq_length = args.seq_length
+        self.seq_length = seq_length
         self.n_special_tokens = args.n_special_tokens
         self.args = args
         self.global_step = 0
@@ -89,7 +89,8 @@ class MaskedDataset(torch.utils.data.Dataset):
             for offset in range(0, len(document), self.seq_length - 2)
             if len(document) > 0 and len(document) - offset > 1
         ]
-        self.segments = self.segments[rank::world_size]
+        if rank is not None:
+            self.segments = self.segments[rank::world_size]
         self.counts = [
             torch.zeros_like(segment)
             for segment in self.segments
@@ -211,9 +212,9 @@ class MaskedDataset(torch.utils.data.Dataset):
 
 
 class CausalDataset(torch.utils.data.Dataset):
-    def __init__(self, input_file: str, tokenizer, args, rank, world_size):
+    def __init__(self, input_file: str, tokenizer, args, seq_length, rank, world_size):
         self.path = input_file
-        self.seq_length = args.seq_length
+        self.seq_length = seq_length
         self.n_special_tokens = args.n_special_tokens
         self.args = args
         self.global_step = 0
@@ -229,7 +230,8 @@ class CausalDataset(torch.utils.data.Dataset):
             for offset in range(0, len(document), self.seq_length - 2)
             if len(document) > 0 and len(document) - offset > 1
         ]
-        self.segments = self.segments[rank::world_size]
+        if rank is not None:
+            self.segments = self.segments[rank::world_size]
         self.counts = [
             torch.zeros_like(segment)
             for segment in self.segments
@@ -346,8 +348,11 @@ class ValidationDataset(torch.utils.data.Dataset):
             for offset in range(0, len(document), self.seq_length - 2)
             if len(document) > 0 and len(document) - offset > 1
         ]
-        self.segments = self.segments[args.rank::args.world_size]
-        random.seed(args.rank)
+        if hasattr(args, "rank"):
+            self.segments = self.segments[args.rank::args.world_size]
+            random.seed(args.rank)
+        else:
+            random.seed(args.seed)
         random.shuffle(self.segments)
 
     def __len__(self):

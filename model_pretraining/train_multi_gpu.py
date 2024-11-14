@@ -39,7 +39,7 @@ def parse_arguments():
     parser.add_argument("--wandb_entity", default="YOUR_WANDB_ENTITY", type=str, help="The entity to log to on WandB (typically your wandb username).")
     parser.add_argument("--config_file", default="../configs/base.json", type=Path, help="The BERT model config")
     parser.add_argument("--tokenizer_path", default="../tokenizers/tokenizer_100M.json", type=Path, help="Path to the tokenizer.")
-    parser.add_argument("--output_dir", default="../checkpoints", type=Path, help="The output directory where the model checkpoints will be written.")
+    parser.add_argument("--output_dir", default="../model_checkpoints", type=Path, help="The output directory where the model checkpoints will be written.")
     parser.add_argument("--checkpoint_filename", default=None, type=Path, help="The checkpoint filename to resume training.")
     parser.add_argument("--optimizer", default="lamb", type=str, help="The optimizer to use.")
     parser.add_argument("--hybrid_numerator", default=15, type=int, help="The numerator of the hybrid ratio.")
@@ -312,7 +312,7 @@ def training_epoch(model, ema_model, train_dataloader, valid_dataloader, optimiz
                     "train/clm_loss": total_clm_loss,
                     "stats/learning_rate": optimizer.param_groups[0]['lr'],
                     "stats/grad_norm": total_grad_norm,
-                    "stats/seq_length": args.seq_length,
+                    "stats/seq_length": train_dataloader.dataset.seq_length,
                     "stats/global_batch_size": args.current_global_batch_size,
                     "stats/local_batch_size": args.current_local_batch_size,
                     "stats/accumulate_steps": args.accumulate_steps,
@@ -407,24 +407,24 @@ def load_datasets(args, tokenizer, epoch, global_step, train_dataloader, valid_d
     train_seed = args.seed + get_rank() + epoch * get_world_size()
 
     if (global_step + 1) / args.max_steps >= 0.9:
-        args.seq_length = 512
+        seq_length = args.seq_length * 4
         global_batch_size = args.global_batch_size // 4
     elif (global_step + 1) / args.max_steps >= 0.7:
-        args.seq_length = 256
+        seq_length = args.seq_length * 2
         global_batch_size = args.global_batch_size // 2
     else:
-        args.seq_length = 128
+        seq_length = args.seq_length
         global_batch_size = args.global_batch_size
 
-    if train_dataloader is None or train_dataloader.dataset.seq_length != args.seq_length:
+    if train_dataloader is None or train_dataloader.dataset.seq_length != seq_length:
         if args.dataset_type == "masked":
             rank = args.rank
             world_size = args.world_size * args.hybrid_numerator // args.hybrid_denominator
-            train_data = MaskedDataset(args.train_path, tokenizer, args, rank, world_size)
+            train_data = MaskedDataset(args.train_path, tokenizer, args, seq_length, rank, world_size)
         else:
             rank = args.rank - args.world_size * args.hybrid_numerator // args.hybrid_denominator
             world_size = args.world_size * (args.hybrid_denominator - args.hybrid_numerator) // args.hybrid_denominator
-            train_data = CausalDataset(args.train_path, tokenizer, args, rank, world_size)
+            train_data = CausalDataset(args.train_path, tokenizer, args, seq_length, rank, world_size)
 
         if is_main_process():
             train_data.show_random_item(tokenizer)
