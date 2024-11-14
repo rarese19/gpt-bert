@@ -442,11 +442,11 @@ def training_epoch(model, ema_model, train_dataloader, valid_dataloader, optimiz
 
         # checkpoint the model and the full training state
         if global_step % args.save_every == 0:
-            save(model, ema_model, optimizer, scheduler, global_step, epoch, args)
+            save(model, ema_model, optimizer, scheduler, global_step, masked_epoch, causal_epoch, args)
 
         # validate the model
         if (global_step + 1) % args.validate_every == 0:
-            validation_epoch(model, valid_dataloader, epoch, args)
+            validation_epoch(model, valid_dataloader, masked_epoch, causal_epoch, args)
             model.train()
 
         # log the stats and commit
@@ -615,6 +615,7 @@ if __name__ == "__main__":
     if args.ratio != 1 and args.ratio != 0:
         global_step, masked_epoch, causal_epoch = training(model, ema_model, masked_train_dataloader, causal_train_dataloader, valid_dataloader, optimizer, scheduler, global_step, args)
     elif args.ratio == 1:
+        causal_epoch = 0
         for masked_epoch in count(start=start_epoch):
             global_step = training_epoch(model, ema_model, masked_train_dataloader, valid_dataloader, optimizer, scheduler, global_step, masked_epoch, args)
             masked_train_dataloader = load_dataset(args, tokenizer, masked_epoch, global_step, masked_train_dataloader, mode="masked")
@@ -622,6 +623,7 @@ if __name__ == "__main__":
             if global_step >= args.max_steps:
                 break
     else:
+        masked_epoch = 0
         for causal_epoch in count(start=start_epoch):
             global_step = training_epoch(model, ema_model, causal_train_dataloader, valid_dataloader, optimizer, scheduler, global_step, causal_epoch, args)
             causal_train_dataloader = load_dataset(args, tokenizer, causal_epoch, global_step, causal_train_dataloader, mode="causal")
