@@ -260,13 +260,14 @@ def load_dataset(args, tokenizer, epoch, global_step, train_dataloader, mode="ma
     # linear batch size scaling
     args.current_global_batch_size = int(global_batch_size / args.batch_reduction * (1 - global_step / args.max_steps) + global_batch_size * (global_step / args.max_steps) + 0.5)
     total_local_batch_size = int(args.current_global_batch_size * ratio + 0.5)
-    args.accumulate_steps = int(math.ceil(args.current_global_batch_size / args.local_batch_size))
-    args.current_local_batch_size = total_local_batch_size // args.accumulate_steps
+    if total_local_batch_size:
+        total_local_batch_size = 1
+        print(f"WARNING: The current {mode} ratio gives a batch size smaller than 1, the batch size is now set to 1.")
 
     train_dataloader = DataLoader(
         train_data,
         shuffle=True,
-        batch_size=args.current_local_batch_size,
+        batch_size=total_local_batch_size,
         num_workers=0,  # non-zero num_workers causes segmenation fault
         generator=torch.Generator().manual_seed(train_seed),
         drop_last=True,
@@ -283,19 +284,20 @@ def init_datasets(args, tokenizer):
 
     # linear batch size scaling
     args.current_global_batch_size = int(global_batch_size / args.batch_reduction + 0.5)
-    args.accumulate_steps = int(math.ceil(args.current_global_batch_size / args.local_batch_size))
 
     if args.ratio != 0:
         masked_train_data = MaskedDataset(args.train_path, tokenizer, args, seq_length, None, None)
         masked_train_data.show_random_item(tokenizer)
 
-        total_masked_local_batch_size = min(int(args.current_global_batch_size * args.ratio + 0.5), args.current_global_batch_size)
-        current_masked_local_batch_size = total_masked_local_batch_size // args.accumulate_steps
+        total_masked_local_batch_size = int(args.current_global_batch_size * args.ratio + 0.5)
+        if total_masked_local_batch_size == 0:
+            total_masked_local_batch_size = 1
+            print("WARNING: The current masked ratio gives a batch size smaller than 1, the batch size is now set to 1.")
 
         masked_train_dataloader = DataLoader(
             masked_train_data,
             shuffle=True,
-            batch_size=current_masked_local_batch_size,
+            batch_size=total_masked_local_batch_size,
             num_workers=0,  # non-zero num_workers causes segmenation fault
             generator=torch.Generator().manual_seed(train_seed),
             drop_last=True,
@@ -308,13 +310,15 @@ def init_datasets(args, tokenizer):
         causal_train_data = CausalDataset(args.train_path, tokenizer, args, seq_length, None, None)
         causal_train_data.show_random_item(tokenizer)
 
-        total_causal_local_batch_size = min(int(args.current_global_batch_size * (1 - args.ratio) + 0.5), args.current_global_batch_size)
-        current_causal_local_batch_size = total_causal_local_batch_size // args.accumulate_steps
+        total_causal_local_batch_size = int(args.current_global_batch_size * (1 - args.ratio) + 0.5)
+        if total_causal_local_batch_size == 0:
+            total_causal_local_batch_size = 1
+            print("WARNING: The current causal ratio gives a batch size smaller than 1, the batch size is now set to 1.")
 
         causal_train_dataloader = DataLoader(
             causal_train_data,
             shuffle=True,
-            batch_size=current_causal_local_batch_size,
+            batch_size=total_causal_local_batch_size,
             num_workers=0,  # non-zero num_workers causes segmenation fault
             generator=torch.Generator().manual_seed(train_seed),
             drop_last=True,
@@ -338,7 +342,7 @@ def init_datasets(args, tokenizer):
     return masked_train_dataloader, causal_train_dataloader, valid_dataloader
 
 
-def training_epoch(model, ema_model, train_dataloader, valid_dataloader, optimizer, scheduler, global_step, epoch, args):
+def training_epoch(model, ema_model, train_dataloader, valid_dataloader, optimizer, scheduler, global_step, epoch, args):  # Fix accumulation
     model = model.train()
     optimizer.zero_grad(set_to_none=True)
 
@@ -480,41 +484,48 @@ def training(model, ema_model, masked_train_dataloader, causal_train_dataloader,
 
     # iterate over the steps
     for local_step in range(num_steps):
-        for _ in range(args.accumulate_steps):
-            try:
-                masked_input_ids, masked_attention_mask, masked_target_ids, mask_p = get_batch(train_masked_iter, args.device, global_step)
-            except StopIteration:
+        try:
+            masked_input_ids, masked_attention_mask, masked_target_ids, mask_p = get_batch(train_masked_iter, args.device, global_step)
+        except StopIteration:
+            masked_epoch += 1
+            masked_train_dataloader = load_dataset(args, tokenizer, masked_epoch, global_step, masked_train_dataloader)
+            train_masked_iter = iter(masked_train_dataloader)
+            masked_input_ids, masked_attention_mask, masked_target_ids, mask_p = get_batch(train_masked_iter, args.device, global_step)
+            save(model, ema_model, optimizer, scheduler, global_step, masked_epoch, causal_epoch, args)
+
+        try:
+            causal_input_ids, causal_attention_mask, causal_target_ids, mask_p = get_batch(train_causal_iter, args.device, global_step)
+        except StopIteration:
+            causal_epoch += 1
+            causal_train_dataloader = load_dataset(args, tokenizer, causal_epoch, global_step, causal_train_dataloader, mode="causal")
+            train_causal_iter = iter(causal_train_dataloader)
+            causal_input_ids, causal_attention_mask, causal_target_ids, mask_p = get_batch(train_causal_iter, args.device, global_step)
+            save(model, ema_model, optimizer, scheduler, global_step, masked_epoch, causal_epoch, args)
+
+        if masked_train_dataloader.dataset.seq_length != causal_train_dataloader.dataset.seq_length:
+            if masked_train_dataloader.dataset.seq_length < causal_train_dataloader.dataset.seq_length:
                 masked_epoch += 1
                 masked_train_dataloader = load_dataset(args, tokenizer, masked_epoch, global_step, masked_train_dataloader)
                 train_masked_iter = iter(masked_train_dataloader)
                 masked_input_ids, masked_attention_mask, masked_target_ids, mask_p = get_batch(train_masked_iter, args.device, global_step)
-            save(model, ema_model, optimizer, scheduler, global_step, masked_epoch, causal_epoch, args)
-
-            try:
-                causal_input_ids, causal_attention_mask, causal_target_ids, mask_p = get_batch(train_causal_iter, args.device, global_step)
-            except StopIteration:
+            else:
                 causal_epoch += 1
-                causal_train_dataloader = load_dataset(args, tokenizer, causal_epoch, global_step, causal_train_dataloader, mode="causal")
+                causal_train_dataloader = load_dataset(args, tokenizer, causal_epoch, global_step, causal_train_dataloader)
                 train_causal_iter = iter(causal_train_dataloader)
                 causal_input_ids, causal_attention_mask, causal_target_ids, mask_p = get_batch(train_causal_iter, args.device, global_step)
-            save(model, ema_model, optimizer, scheduler, global_step, masked_epoch, causal_epoch, args)
 
-            if masked_train_dataloader.dataset.seq_length != causal_train_dataloader.dataset.seq_length:
-                if masked_train_dataloader.dataset.seq_length < causal_train_dataloader.dataset.seq_length:
-                    masked_epoch += 1
-                    masked_train_dataloader = load_dataset(args, tokenizer, masked_epoch, global_step, masked_train_dataloader)
-                    train_masked_iter = iter(masked_train_dataloader)
-                    masked_input_ids, masked_attention_mask, masked_target_ids, mask_p = get_batch(train_masked_iter, args.device, global_step)
-                else:
-                    causal_epoch += 1
-                    causal_train_dataloader = load_dataset(args, tokenizer, causal_epoch, global_step, causal_train_dataloader)
-                    train_causal_iter = iter(causal_train_dataloader)
-                    causal_input_ids, causal_attention_mask, causal_target_ids, mask_p = get_batch(train_causal_iter, args.device, global_step)
+        num_masked = masked_input_ids.size(1)
+        full_input_ids = torch.cat([masked_input_ids, causal_input_ids], dim=1)
+        full_attention_mask = torch.cat([masked_attention_mask, causal_attention_mask], dim=0)
+        full_target_ids = torch.cat([masked_target_ids, causal_target_ids], dim=1)
 
-            num_masked = masked_input_ids.size(1)
-            input_ids = torch.cat([masked_input_ids, causal_input_ids], dim=1)
-            attention_mask = torch.cat([masked_attention_mask, causal_attention_mask], dim=0)
-            target_ids = torch.cat([masked_target_ids, causal_target_ids], dim=1)
+        accumulate_steps = full_input_ids.size(1) / args.local_batch_size
+
+        for start in range(0, full_input_ids.size(1), args.local_batch_size):
+
+            input_ids = full_input_ids[:, start:start+args.local_batch_size]
+            attention_mask = full_attention_mask[start:start+args.local_batch_size]
+            target_ids = full_target_ids[:, start:start+args.local_batch_size]
 
             # forward pass, do a more detailed check of the model every 100 steps
             with torch.cuda.amp.autocast(args.mixed_precision, dtype=torch.bfloat16):
@@ -522,7 +533,7 @@ def training(model, ema_model, masked_train_dataloader, causal_train_dataloader,
                     loss, masked_loss, causal_loss, accuracy, masked_accuracy, causal_accuracy, z_loss, num_tokens = model(input_ids, attention_mask, target_ids, num_masked, args.ratio)
 
             # calculate the weight for the loss
-            weight = 1.0 / args.accumulate_steps
+            weight = (input_ids.size(1) / args.local_batch_size) / accumulate_steps
 
             # backward pass through both losses
             ((loss + args.z_loss_weight * z_loss) * weight).backward()
@@ -536,6 +547,8 @@ def training(model, ema_model, masked_train_dataloader, causal_train_dataloader,
             total_causal_accuracy += causal_accuracy * weight
             total_z_loss += z_loss * weight
             total_mask_p += mask_p * weight
+
+            num_masked = max(0, num_masked - args.local_batch_size)
 
         # clip the gradients
         total_grad_norm += nn.utils.clip_grad_norm_(model.parameters(), args.max_gradient) * weight
