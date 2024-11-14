@@ -342,7 +342,7 @@ def init_datasets(args, tokenizer):
     return masked_train_dataloader, causal_train_dataloader, valid_dataloader
 
 
-def training_epoch(model, ema_model, train_dataloader, valid_dataloader, optimizer, scheduler, global_step, epoch, args):  # Fix accumulation
+def training_epoch(model, ema_model, train_dataloader, valid_dataloader, optimizer, scheduler, global_step, epoch, args):
     model = model.train()
     optimizer.zero_grad(set_to_none=True)
 
@@ -351,39 +351,41 @@ def training_epoch(model, ema_model, train_dataloader, valid_dataloader, optimiz
 
     # initialize the dataloader and the metrics
     train_dataloader = iter(train_dataloader)
-    total_loss, total_accuracy, total_z_loss, total_mask_p, total_grad_norm = 0.0, 0.0, 0.0, 0.0, 0.0
+    total_loss, total_accuracy, total_z_loss, total_grad_norm = 0.0, 0.0, 0.0, 0.0
 
     # get the first batch
     input_ids_, attention_mask_, target_ids_, mask_p_ = get_batch(train_dataloader, args.device, global_step)
 
     # iterate over the steps
     for local_step in tqdm(range(num_steps), desc="Train iteration", initial=global_step, total=args.max_steps):
-        input_ids, attention_mask, target_ids, mask_p = input_ids_, attention_mask_, target_ids_, mask_p_
+        full_input_ids, full_attention_mask, full_target_ids, mask_p = input_ids_, attention_mask_, target_ids_, mask_p_
 
-        # forward pass, do a more detailed check of the model every 100 steps
-        with torch.cuda.amp.autocast(args.mixed_precision, dtype=torch.bfloat16):
-            with ModelLogger(enable=global_step % 100 == 0, module=model):
-                loss, accuracy, z_loss, num_tokens = model(input_ids, attention_mask, target_ids)
+        accumulate_steps = full_input_ids.size(1) / args.local_batch_size
+
+        for start in range(0, full_input_ids.size(1), args.local_batch_size):
+            input_ids = full_input_ids[:, start:start+args.local_batch_size]
+            attention_mask = full_attention_mask[start:start+args.local_batch_size]
+            target_ids = full_target_ids[:, start:start+args.local_batch_size]
+
+            # forward pass, do a more detailed check of the model every 100 steps
+            with torch.cuda.amp.autocast(args.mixed_precision, dtype=torch.bfloat16):
+                with ModelLogger(enable=global_step % 100 == 0, module=model):
+                    loss, accuracy, z_loss, num_tokens = model(input_ids, attention_mask, target_ids)
+
+            # calculate the weight for the loss (either token-weighted or not)
+            weight = (input_ids.size(1) / args.local_batch_size) / accumulate_steps
+
+            # backward pass through both losses
+            ((loss + args.z_loss_weight * z_loss) * weight).backward()
+
+            # add the tracked metrics (for gradient accumulation)
+            total_loss += loss.detach() * weight
+            total_accuracy += accuracy * weight
+            total_z_loss += z_loss * weight
 
         # get the next batch
         if local_step < num_steps - 1:
-            input_ids_, attention_mask_, target_ids_, mask_p_ = get_batch(train_dataloader, args.device, global_step)
-
-        # calculate the weight for the loss (either token-weighted or not)
-        weight = 1.0 / args.accumulate_steps
-
-        # backward pass through both losses
-        ((loss + args.z_loss_weight * z_loss) * weight).backward()
-
-        # add the tracked metrics (for gradient accumulation)
-        total_loss += loss.detach() * weight
-        total_accuracy += accuracy * weight
-        total_z_loss += z_loss * weight
-        total_mask_p += mask_p * weight
-
-        # gradient accumulation -- if we have accumulated enough gradients, we can perform the optimizer step; otherwise, we just continue and backpropagate through the next batch
-        if (local_step + 1) % args.accumulate_steps != 0:
-            continue
+            full_input_ids, full_attention_mask, full_target_ids, mask_p = get_batch(train_dataloader, args.device, global_step)
 
         # clip the gradients
         total_grad_norm += nn.utils.clip_grad_norm_(model.parameters(), args.max_gradient) * weight
@@ -435,14 +437,14 @@ def training_epoch(model, ema_model, train_dataloader, valid_dataloader, optimiz
                 "stats/global_batch_size": args.current_global_batch_size,
                 "stats/local_batch_size": args.current_local_batch_size,
                 "stats/accumulate_steps": args.accumulate_steps,
-                "stats/mask_p": total_mask_p,
+                "stats/mask_p": mask_p.item(),
             },
             commit=False
         )
 
         # zero the accumulated gradients and the metrics
         optimizer.zero_grad(set_to_none=True)
-        total_loss, total_accuracy, total_z_loss, total_mask_p, total_grad_norm = 0.0, 0.0, 0.0, 0.0, 0.0
+        total_loss, total_accuracy, total_z_loss, total_grad_norm = 0.0, 0.0, 0.0, 0.0
 
         # checkpoint the model and the full training state
         if global_step % args.save_every == 0:
@@ -480,7 +482,7 @@ def training(model, ema_model, masked_train_dataloader, causal_train_dataloader,
     train_causal_iter = iter(causal_train_dataloader)
     total_loss, total_masked_loss, total_causal_loss = 0.0, 0.0, 0.0
     total_accuracy, total_masked_accuracy, total_causal_accuracy = 0.0, 0.0, 0.0
-    total_z_loss, total_mask_p, total_grad_norm = 0.0, 0.0, 0.0
+    total_z_loss, total_grad_norm = 0.0, 0.0
 
     # iterate over the steps
     for local_step in range(num_steps):
@@ -522,7 +524,6 @@ def training(model, ema_model, masked_train_dataloader, causal_train_dataloader,
         accumulate_steps = full_input_ids.size(1) / args.local_batch_size
 
         for start in range(0, full_input_ids.size(1), args.local_batch_size):
-
             input_ids = full_input_ids[:, start:start+args.local_batch_size]
             attention_mask = full_attention_mask[start:start+args.local_batch_size]
             target_ids = full_target_ids[:, start:start+args.local_batch_size]
@@ -546,7 +547,6 @@ def training(model, ema_model, masked_train_dataloader, causal_train_dataloader,
             total_masked_accuracy += masked_accuracy * weight
             total_causal_accuracy += causal_accuracy * weight
             total_z_loss += z_loss * weight
-            total_mask_p += mask_p * weight
 
             num_masked = max(0, num_masked - args.local_batch_size)
 
@@ -583,7 +583,7 @@ def training(model, ema_model, masked_train_dataloader, causal_train_dataloader,
                     "stats/global_batch_size": args.current_global_batch_size,
                     "stats/local_batch_size": args.current_local_batch_size,
                     "stats/accumulate_steps": args.accumulate_steps,
-                    "stats/mask_p": total_mask_p.item(),
+                    "stats/mask_p": mask_p.item(),
                 },
                 commit=False
             )
@@ -592,7 +592,7 @@ def training(model, ema_model, masked_train_dataloader, causal_train_dataloader,
         optimizer.zero_grad(set_to_none=True)
         total_loss, total_masked_loss, total_causal_loss = 0.0, 0.0, 0.0
         total_accuracy, total_masked_accuracy, total_causal_accuracy = 0.0, 0.0, 0.0
-        total_z_loss, total_mask_p, total_grad_norm = 0.0, 0.0, 0.0
+        total_z_loss, total_grad_norm = 0.0, 0.0
 
         # checkpoint the model and the full training state
         if global_step % args.save_every == 0:
