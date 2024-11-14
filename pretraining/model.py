@@ -39,25 +39,47 @@ class Bert(nn.Module):
         else:
             masked_subword_prediction, causal_subword_prediction = self.classifier(contextualized_embeddings, masked_lm_labels, num_masked)
 
-            masked_gold_labels = masked_lm_labels[:, :num_masked].flatten()
-            masked_gold_labels = masked_gold_labels[masked_gold_labels != -100]
-            causal_gold_labels = masked_lm_labels[:, num_masked:].flatten()
-            causal_gold_labels = causal_gold_labels[causal_gold_labels != -100]
+            if masked_subword_prediction is not None:
+                masked_gold_labels = masked_lm_labels[:, :num_masked].flatten()
+                masked_gold_labels = masked_gold_labels[masked_gold_labels != -100]
 
-            masked_loss = F.cross_entropy(masked_subword_prediction, masked_gold_labels)
-            causal_loss = F.cross_entropy(causal_subword_prediction, causal_gold_labels)
+                masked_loss = F.cross_entropy(masked_subword_prediction, masked_gold_labels)
+                masked_z_loss = torch.logsumexp(masked_subword_prediction, dim=-1).pow(2).mean()
+
+                with torch.no_grad():
+                    masked_accuracy = (masked_subword_prediction.argmax(-1) == masked_gold_labels).float().mean()
+
+                num_masked_tokens = masked_gold_labels.size(0)
+            else:
+                masked_loss = 0.0
+                masked_z_loss = 0.0
+                masked_accuracy = 0.0
+                num_masked_tokens = 0
+
+            if causal_subword_prediction is not None:
+                causal_gold_labels = masked_lm_labels[:, num_masked:].flatten()
+                causal_gold_labels = causal_gold_labels[causal_gold_labels != -100]
+
+                causal_loss = F.cross_entropy(causal_subword_prediction, causal_gold_labels)
+                causal_z_loss = torch.logsumexp(causal_subword_prediction, dim=-1).pow(2).mean()
+
+                with torch.no_grad():
+                    causal_accuracy = (causal_subword_prediction.argmax(-1) == causal_gold_labels).float().mean()
+
+                num_causal_tokens = causal_gold_labels.size(0)
+            else:
+                causal_loss = 0.0
+                causal_z_loss = 0.0
+                causal_accuracy = 0.0
+                num_causal_tokens = 0
+
             loss = ratio * masked_loss + (1 - ratio) * causal_loss
-
-            masked_z_loss = torch.logsumexp(masked_subword_prediction, dim=-1).pow(2).mean()
-            causal_z_loss = torch.logsumexp(causal_subword_prediction, dim=-1).pow(2).mean()
             z_loss = ratio * masked_z_loss + (1 - ratio) * causal_z_loss
 
             with torch.no_grad():
-                masked_accuracy = (masked_subword_prediction.argmax(-1) == masked_gold_labels).float().mean()
-                causal_accuracy = (causal_subword_prediction.argmax(-1) == causal_gold_labels).float().mean()
                 accuracy = ratio * masked_accuracy + (1 - ratio) * causal_accuracy
 
-            num_tokens = masked_gold_labels.size(0) + causal_gold_labels.size(0)
+            num_tokens = num_masked_tokens + num_causal_tokens
 
             return loss, masked_loss, causal_loss, accuracy, masked_accuracy, causal_accuracy, z_loss, num_tokens
 
@@ -111,11 +133,18 @@ class MaskClassifier(nn.Module):
             masked_x, causal_x = torch.tensor_split(x, (num_masked,), dim=1)
             mntp_masked_lm_labels, causal_masked_lm_labels = torch.tensor_split(masked_lm_labels, (num_masked,), dim=1)
 
-            masked_x = torch.index_select(masked_x.flatten(0, 1), 0, torch.nonzero(mntp_masked_lm_labels.flatten() != -100).squeeze())
-            causal_x = torch.index_select(causal_x.flatten(0, 1), 0, torch.nonzero(causal_masked_lm_labels.flatten() != -100).squeeze())
+            if masked_x.size(1) != 0:
+                masked_x = torch.index_select(masked_x.flatten(0, 1), 0, torch.nonzero(mntp_masked_lm_labels.flatten() != -100).squeeze())
+                masked_x = self.nonlinearity(masked_x)
+            else:
+                masked_x = None
 
-            masked_x = self.nonlinearity(masked_x)
-            causal_x = self.nonlinearity(causal_x)
+            if causal_x.size(1) != 0:
+                causal_x = torch.index_select(causal_x.flatten(0, 1), 0, torch.nonzero(causal_masked_lm_labels.flatten() != -100).squeeze())
+                causal_x = self.nonlinearity(causal_x)
+            else:
+                causal_x = None
+
             return masked_x, causal_x
 
 
