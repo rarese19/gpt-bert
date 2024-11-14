@@ -54,9 +54,6 @@ Incomplete files/folders:
 
 - evaluation
 
-Missing files:
-- train_single_gpu.py
-
 ## Content of this repository
 
 - `./tokenizer_creation/`: Contains scripts for creating a tokenizer.

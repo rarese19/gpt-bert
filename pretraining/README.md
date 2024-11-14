@@ -21,10 +21,48 @@ This repository contains code for pre-training BERT models using a hybrid approa
 
 ## Training Script
 
-The main training script supports numerous configuration options. Here's how to use it:
+The main training script supports numerous configuration options. Here's how to use it for multi-gpu:
 
 ```bash
 python train_multi_gpu.py \
+    --train_path="PATH_TO_TRAINING_DATA" \
+    --valid_path="PATH_TO_VALIDATION_DATA" \
+    --config_file="PATH_TO_MODEL_CONFIG" \
+    --tokenizer_path="PATH_TO_TOKENIZER" \
+    --output_dir="PATH_TO_SAVE_CHECKPOINTS" \
+    # WandB information + model name
+    --name="RUN_NAME" \
+    --wandb_project="YOUR_WANDB_PROJECT_NAME" \
+    --wandb_entity="YOUR_WANDB_ENTITY" \
+    # Training Configuration
+    --hybrid_numerator=15 \
+    --hybrid_denominator=16 \
+    --seq_length=128 \
+    --local_batch_size=128 \
+    --global_batch_size=32768 \
+    --learning_rate=1e-2 \
+    --max_steps=15625 \
+    # Optimizer & Scheduler
+    --optimizer="lamb" \
+    --weight_decay=0.1 \
+    --warmup_proportion=0.016 \
+    --cooldown_proportion=0.016 \
+    # Masking Configuration
+    --mask_p_start=0.3 \
+    --mask_p_end=0.15 \
+    --mask_random_p=0.1 \
+    --mask_keep_p=0.1 \
+    # Training Control
+    --mixed_precision \
+    --validate_every=1000 \
+    --save_every=1000 \
+    --seed=42
+```
+
+And for single-gpu:
+
+```bash
+python train_single_gpu.py \
     --train_path="PATH_TO_TRAINING_DATA" \
     --valid_path="PATH_TO_VALIDATION_DATA" \
     --config_file="PATH_TO_MODEL_CONFIG" \
@@ -68,7 +106,7 @@ The code implements a hybrid training approach where:
 - The remaining GPUs train with CLM
 - Losses are automatically weighted and combined based on the ratio
 
-Important note: the current code assumes multi-GPU training! For example, if you want to train with a 1:3 causal-to-mask ratio, you have to have at least 4 GPUs. You need your number of GPUs to be a multiple of your `hybrid_denominator`.
+Important note: The code that assumes multi-gpu needs the number of GPUs being used to be a multiple of your `hybrid_denominator` i.e. if you want to train with a 1:3 causal-to-mask ratio, you have to have a multiple of 4 number of GPUs.
 
 ### Dynamic Scheduling
 

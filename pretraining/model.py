@@ -39,9 +39,9 @@ class Bert(nn.Module):
         else:
             masked_subword_prediction, causal_subword_prediction = self.classifier(contextualized_embeddings, masked_lm_labels, num_masked)
 
-            masked_gold_labels = gold_labels[:, :num_masked].flatten()
+            masked_gold_labels = masked_lm_labels[:, :num_masked].flatten()
             masked_gold_labels = masked_gold_labels[masked_gold_labels != -100]
-            causal_gold_labels = gold_labels[:, num_masked:].flatten()
+            causal_gold_labels = masked_lm_labels[:, num_masked:].flatten()
             causal_gold_labels = causal_gold_labels[causal_gold_labels != -100]
 
             masked_loss = F.cross_entropy(masked_subword_prediction, masked_gold_labels)
@@ -53,8 +53,8 @@ class Bert(nn.Module):
             z_loss = ratio * masked_z_loss + (1 - ratio) * causal_z_loss
 
             with torch.no_grad():
-                masked_accuracy = (masked_subword_prediction.argmax(-1) == gold_labels).float().mean()
-                causal_accuracy = (causal_subword_prediction.argmax(-1) == gold_labels).float().mean()
+                masked_accuracy = (masked_subword_prediction.argmax(-1) == masked_gold_labels).float().mean()
+                causal_accuracy = (causal_subword_prediction.argmax(-1) == causal_gold_labels).float().mean()
                 accuracy = ratio * masked_accuracy + (1 - ratio) * causal_accuracy
 
             num_tokens = masked_gold_labels.size(0) + causal_gold_labels.size(0)

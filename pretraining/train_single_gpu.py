@@ -503,8 +503,8 @@ def training(model, ema_model, masked_train_dataloader, causal_train_dataloader,
                 if masked_train_dataloader.dataset.seq_length < causal_train_dataloader.dataset.seq_length:
                     masked_epoch += 1
                     masked_train_dataloader = load_dataset(args, tokenizer, masked_epoch, global_step, masked_train_dataloader)
-                    train_mlm_iter = iter(masked_train_dataloader)
-                    masked_input_ids, masked_attention_mask, masked_target_ids, mask_p = get_batch(train_mlm_iter, args.device, global_step)
+                    train_masked_iter = iter(masked_train_dataloader)
+                    masked_input_ids, masked_attention_mask, masked_target_ids, mask_p = get_batch(train_masked_iter, args.device, global_step)
                 else:
                     causal_epoch += 1
                     causal_train_dataloader = load_dataset(args, tokenizer, causal_epoch, global_step, causal_train_dataloader)
