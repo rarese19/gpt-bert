@@ -5,10 +5,10 @@ import torch.nn.functional as F
 @torch.no_grad()
 def rank_mlm(sentences, model, tokenizer, device, batch_size, temperatures=None):
     # Change the values of the tokes to your tokenizer values
-    mask_index = tokenizer.token_to_id("[MASK]")
-    cls_index = torch.tensor([tokenizer.token_to_id("[CLS]")])
-    sep_index = torch.tensor([tokenizer.token_to_id("[SEP]")])
-    pad_index = tokenizer.token_to_id("[PAD]")
+    mask_index = tokenizer.token_to_id("<mask>")
+    cls_index = torch.tensor([tokenizer.token_to_id("<s>")])
+    sep_index = torch.tensor([tokenizer.token_to_id("</s>")])
+    pad_index = tokenizer.token_to_id("<pad>")
 
     sentences = [torch.tensor(tokenizer.encode(s, add_special_tokens=False).ids) for s in sentences]
 
@@ -69,8 +69,8 @@ def rank_mlm(sentences, model, tokenizer, device, batch_size, temperatures=None)
 @torch.no_grad()
 def rank_causal(sentences, model, tokenizer, device, batch_size, temperatures=None):
     # Change the values of the tokes to your tokenizer values
-    cls_index = torch.tensor([tokenizer.token_to_id("[CLS]")])
-    pad_index = tokenizer.token_to_id("[PAD]")
+    cls_index = torch.tensor([tokenizer.token_to_id("<s>")])
+    pad_index = tokenizer.token_to_id("<pad>")
 
     sentences = [torch.tensor(tokenizer.encode(s, add_special_tokens=False).ids) for s in sentences]
 
@@ -120,9 +120,9 @@ def rank_causal(sentences, model, tokenizer, device, batch_size, temperatures=No
 @torch.no_grad()
 def rank_mlm_shift(sentences, model, tokenizer, device, batch_size, temperatures=None):
     # Change the values of the tokes to your tokenizer values
-    mask_index = tokenizer.token_to_id("[MASK]")
-    cls_index = torch.tensor([tokenizer.token_to_id("[CLS]")])
-    pad_index = tokenizer.token_to_id("[PAD]")
+    mask_index = tokenizer.token_to_id("<mask>")
+    cls_index = torch.tensor([tokenizer.token_to_id("<s>")])
+    pad_index = tokenizer.token_to_id("<pad>")
 
     sentences = [torch.tensor(tokenizer.encode(s, add_special_tokens=False).ids) for s in sentences]
 
@@ -183,9 +183,9 @@ def rank_mlm_shift(sentences, model, tokenizer, device, batch_size, temperatures
 @torch.no_grad()
 def rank_fused(sentences, model, tokenizer, device, batch_size, temperatures=None):
     # Change the values of the tokes to your tokenizer values
-    mask_index = tokenizer.token_to_id("[MASK]")
-    cls_index = torch.tensor([tokenizer.token_to_id("[CLS]")])
-    pad_index = tokenizer.token_to_id("[PAD]")
+    mask_index = tokenizer.token_to_id("<mask>")
+    cls_index = torch.tensor([tokenizer.token_to_id("<s>")])
+    pad_index = tokenizer.token_to_id("<pad>")
 
     sentences = [torch.tensor(tokenizer.encode(s, add_special_tokens=False).ids) for s in sentences]
 

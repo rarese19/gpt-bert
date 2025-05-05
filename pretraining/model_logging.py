@@ -3,7 +3,7 @@ import torch
 from utils import is_main_process
 
 
-if int(os.environ["SLURM_PROCID"]) == 0:
+if int(os.environ.get("SLURM_PROCID", 0)) == 0:
     import wandb
 
 
@@ -25,15 +25,25 @@ class ModelLogger:
     def __enter__(self, *args, **kwargs):
         if not self.enable:
             return self
-
+    
         def log_activations(m, m_in, m_out):
+            # sari dacă nu e output
+            if m_out is None:
+                return
+    
             if isinstance(m_out, (tuple, list)):
-                m_out = m_out[0]
-            self.activations[id(m)] = m_out.detach().cpu()
-
+                tensors = [o for o in m_out if isinstance(o, torch.Tensor)]
+                if not tensors:
+                    return
+                out_tensor = tensors[0]
+            else:
+                out_tensor = m_out
+    
+            self.activations[id(m)] = out_tensor.detach().cpu()
+    
         for m in self.module.modules():
             self.hooks.append(m.register_forward_hook(log_activations))
-
+    
         return self
 
     @torch.no_grad()

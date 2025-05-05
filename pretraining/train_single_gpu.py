@@ -23,7 +23,7 @@ from dataset import MaskedDataset, CausalDataset, ValidationDataset
 from model_logging import ModelLogger
 
 
-if int(os.environ["SLURM_PROCID"]) == 0:
+if int(os.environ.get("SLURM_PROCID", 0)) == 0:
     import wandb
 
 
@@ -155,7 +155,7 @@ def prepare_model_and_optimizer(args):
         0.1
     )
 
-    ema_model: nn.Module = copy.deepcopy(model.module)
+    ema_model: nn.Module = copy.deepcopy(getattr(model, "module", model))
     for param in ema_model.parameters():
         param.requires_grad = False
 
@@ -172,8 +172,10 @@ def prepare_model_and_optimizer(args):
     return model, ema_model, optimizer, scheduler, global_step, epoch
 
 
-def get_batch(dataloader, device, global_step):
-    dataloader._dataset.set_global_step(global_step)
+def get_batch(dataloader, device, global_step, is_train=False):
+    if is_train and hasattr(dataloader._dataset, "set_global_step"):
+        dataloader._dataset.set_global_step(global_step)
+        
     batch = next(dataloader)
     input_ids, target_ids, attention_mask, mask_p = [t.pin_memory().to(device, non_blocking=True) for t in batch]
     input_ids, target_ids = input_ids.t(), target_ids.t()
@@ -215,9 +217,17 @@ def validation_epoch(model, valid_dataloader, masked_epoch, causal_epoch, args, 
 
 def save(model, ema_model, optimizer, scheduler, global_step, masked_epoch, causal_epoch, args):
     if is_main_process():
-        model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model itself
+        model_to_save = model.module if hasattr(model, 'module') else model
         torch.save(model_to_save.state_dict(), args.output_path)
-        torch.save(ema_model.state_dict(), args.output_path.replace(".bin", "_ema.bin"))
+
+        ema_path = args.output_path.with_name(
+            args.output_path.stem + "_ema" + args.output_path.suffix
+        )
+        torch.save(ema_model.state_dict(), ema_path)
+
+        sd_path = args.output_path.with_name(
+            args.output_path.stem + "_state_dict" + args.output_path.suffix
+        )
         torch.save(
             {
                 "model": model.state_dict(),
@@ -228,51 +238,63 @@ def save(model, ema_model, optimizer, scheduler, global_step, masked_epoch, caus
                 "masked_epoch": masked_epoch,
                 "causal_epoch": causal_epoch
             },
-            args.output_path.replace(".bin", "_state_dict.bin")
+            sd_path
         )
 
-
 def load_dataset(args, tokenizer, epoch, global_step, train_dataloader, mode="masked"):
+    # 1) definim ratio din start, indiferent de branșă
+    if mode == "masked":
+        ratio = args.hybrid_numerator / args.hybrid_denominator
+    else:
+        ratio = 1 - (args.hybrid_numerator / args.hybrid_denominator)
+
     train_seed = args.seed + epoch
 
-    if (global_step + 1) / args.max_steps >= 0.9:
+    # 2) alegem seq_length și global_batch_size pe baza progresului
+    progress = (global_step + 1) / args.max_steps
+    if progress >= 0.9:
         seq_length = args.seq_length * 4
-        global_batch_size = args.global_batch_size // 4
-    elif (global_step + 1) / args.max_steps >= 0.7:
+        global_bs = args.global_batch_size // 4
+    elif progress >= 0.7:
         seq_length = args.seq_length * 2
-        global_batch_size = args.global_batch_size // 2
+        global_bs = args.global_batch_size // 2
     else:
         seq_length = args.seq_length
-        global_batch_size = args.global_batch_size
+        global_bs = args.global_batch_size
 
+    # 3) reîncărcăm dataset-ul dacă e prima dată sau lungimea s-a schimbat
     if train_dataloader is None or train_dataloader.dataset.seq_length != seq_length:
         if mode == "masked":
-            ratio = args.hybrid_numerator / args.hybrid_denominator
             train_data = MaskedDataset(args.train_path, tokenizer, args, seq_length, None, None)
         else:
-            ratio = 1 - (args.hybrid_numerator / args.hybrid_denominator)
             train_data = CausalDataset(args.train_path, tokenizer, args, seq_length, None, None)
-
         train_data.show_random_item(tokenizer)
     else:
         train_data = train_dataloader.dataset
 
-    # linear batch size scaling
-    args.current_global_batch_size = int(global_batch_size / args.batch_reduction * (1 - global_step / args.max_steps) + global_batch_size * (global_step / args.max_steps) + 0.5)
-    total_local_batch_size = int(args.current_global_batch_size * ratio + 0.5)
-    if total_local_batch_size:
-        total_local_batch_size = 1
-        print(f"WARNING: The current {mode} ratio gives a batch size smaller than 1, the batch size is now set to 1.")
+    # 4) scalare liniară a batch-ului global pe durata training-ului
+    current_global_bs = int(global_bs / args.batch_reduction * (1 - progress)
+                            + global_bs * progress + 0.5)
 
+    # 5) micro-batch local în funcție de ratio
+    total_local_batch_size = int(current_global_bs * ratio + 0.5)
+    if total_local_batch_size == 0:
+        total_local_batch_size = 1
+        print(f"WARNING: The current {mode} ratio gives a batch size < 1; set to 1.")
+
+    # 6) construim DataLoader-ul
     train_dataloader = DataLoader(
         train_data,
         shuffle=True,
         batch_size=total_local_batch_size,
-        num_workers=0,  # non-zero num_workers causes segmenation fault
+        num_workers=0,
         generator=torch.Generator().manual_seed(train_seed),
         drop_last=True,
         pin_memory=True,
     )
+
+    return train_dataloader
+
 
 
 def init_datasets(args, tokenizer):
@@ -283,13 +305,13 @@ def init_datasets(args, tokenizer):
     args.ratio = args.hybrid_numerator / args.hybrid_denominator
 
     # linear batch size scaling
-    args.current_global_batch_size = int(global_batch_size / args.batch_reduction + 0.5)
+    args.global_batch_size = int(global_batch_size / args.batch_reduction + 0.5)
 
     if args.ratio != 0:
         masked_train_data = MaskedDataset(args.train_path, tokenizer, args, seq_length, None, None)
         masked_train_data.show_random_item(tokenizer)
 
-        total_masked_local_batch_size = int(args.current_global_batch_size * args.ratio + 0.5)
+        total_masked_local_batch_size = int(args.global_batch_size * args.ratio + 0.5)
         if total_masked_local_batch_size == 0:
             total_masked_local_batch_size = 1
             print("WARNING: The current masked ratio gives a batch size smaller than 1, the batch size is now set to 1.")
@@ -310,7 +332,7 @@ def init_datasets(args, tokenizer):
         causal_train_data = CausalDataset(args.train_path, tokenizer, args, seq_length, None, None)
         causal_train_data.show_random_item(tokenizer)
 
-        total_causal_local_batch_size = int(args.current_global_batch_size * (1 - args.ratio) + 0.5)
+        total_causal_local_batch_size = int(args.global_batch_size * (1 - args.ratio) + 0.5)
         if total_causal_local_batch_size == 0:
             total_causal_local_batch_size = 1
             print("WARNING: The current causal ratio gives a batch size smaller than 1, the batch size is now set to 1.")
@@ -347,14 +369,14 @@ def training_epoch(model, ema_model, train_dataloader, valid_dataloader, optimiz
     optimizer.zero_grad(set_to_none=True)
 
     # calculate the number of steps to perform in this epoch
-    num_steps = min(len(train_dataloader), (args.max_steps - global_step) * args.accumulate_steps)
+    num_steps = min(len(train_dataloader), (args.max_steps - global_step) * args.batch_reduction)
 
     # initialize the dataloader and the metrics
     train_dataloader = iter(train_dataloader)
     total_loss, total_accuracy, total_z_loss, total_grad_norm = 0.0, 0.0, 0.0, 0.0
 
     # get the first batch
-    input_ids_, attention_mask_, target_ids_, mask_p_ = get_batch(train_dataloader, args.device, global_step)
+    input_ids_, attention_mask_, target_ids_, mask_p_ = get_batch(train_dataloader, args.device, global_step, True)
 
     # iterate over the steps
     for local_step in tqdm(range(num_steps), desc="Train iteration", initial=global_step, total=args.max_steps):
@@ -385,7 +407,7 @@ def training_epoch(model, ema_model, train_dataloader, valid_dataloader, optimiz
 
         # get the next batch
         if local_step < num_steps - 1:
-            full_input_ids, full_attention_mask, full_target_ids, mask_p = get_batch(train_dataloader, args.device, global_step)
+            full_input_ids, full_attention_mask, full_target_ids, mask_p = get_batch(train_dataloader, args.device, global_step, True)
 
         # clip the gradients
         total_grad_norm += nn.utils.clip_grad_norm_(model.parameters(), args.max_gradient) * weight
@@ -434,9 +456,9 @@ def training_epoch(model, ema_model, train_dataloader, valid_dataloader, optimiz
                 "stats/learning_rate": optimizer.param_groups[0]['lr'],
                 "stats/grad_norm": total_grad_norm,
                 "stats/seq_length": train_dataloader.dataset.seq_length,
-                "stats/global_batch_size": args.current_global_batch_size,
-                "stats/local_batch_size": args.current_local_batch_size,
-                "stats/accumulate_steps": args.accumulate_steps,
+                "stats/global_batch_size": args.global_batch_size,
+                "stats/local_batch_size": args.local_batch_size,
+                "stats/accumulate_steps": args.batch_reduction,
                 "stats/mask_p": mask_p.item(),
             },
             commit=False
@@ -487,21 +509,21 @@ def training(model, ema_model, masked_train_dataloader, causal_train_dataloader,
     # iterate over the steps
     for local_step in range(num_steps):
         try:
-            masked_input_ids, masked_attention_mask, masked_target_ids, mask_p = get_batch(train_masked_iter, args.device, global_step)
+            masked_input_ids, masked_attention_mask, masked_target_ids, mask_p = get_batch(train_masked_iter, args.device, global_step, True)
         except StopIteration:
             masked_epoch += 1
             masked_train_dataloader = load_dataset(args, tokenizer, masked_epoch, global_step, masked_train_dataloader)
             train_masked_iter = iter(masked_train_dataloader)
-            masked_input_ids, masked_attention_mask, masked_target_ids, mask_p = get_batch(train_masked_iter, args.device, global_step)
+            masked_input_ids, masked_attention_mask, masked_target_ids, mask_p = get_batch(train_masked_iter, args.device, global_step, True)
             save(model, ema_model, optimizer, scheduler, global_step, masked_epoch, causal_epoch, args)
 
         try:
-            causal_input_ids, causal_attention_mask, causal_target_ids, mask_p = get_batch(train_causal_iter, args.device, global_step)
+            causal_input_ids, causal_attention_mask, causal_target_ids, mask_p = get_batch(train_causal_iter, args.device, global_step, True)
         except StopIteration:
             causal_epoch += 1
             causal_train_dataloader = load_dataset(args, tokenizer, causal_epoch, global_step, causal_train_dataloader, mode="causal")
             train_causal_iter = iter(causal_train_dataloader)
-            causal_input_ids, causal_attention_mask, causal_target_ids, mask_p = get_batch(train_causal_iter, args.device, global_step)
+            causal_input_ids, causal_attention_mask, causal_target_ids, mask_p = get_batch(train_causal_iter, args.device, global_step, True)
             save(model, ema_model, optimizer, scheduler, global_step, masked_epoch, causal_epoch, args)
 
         if masked_train_dataloader.dataset.seq_length != causal_train_dataloader.dataset.seq_length:
@@ -509,12 +531,12 @@ def training(model, ema_model, masked_train_dataloader, causal_train_dataloader,
                 masked_epoch += 1
                 masked_train_dataloader = load_dataset(args, tokenizer, masked_epoch, global_step, masked_train_dataloader)
                 train_masked_iter = iter(masked_train_dataloader)
-                masked_input_ids, masked_attention_mask, masked_target_ids, mask_p = get_batch(train_masked_iter, args.device, global_step)
+                masked_input_ids, masked_attention_mask, masked_target_ids, mask_p = get_batch(train_masked_iter, args.device, global_step, True)
             else:
                 causal_epoch += 1
                 causal_train_dataloader = load_dataset(args, tokenizer, causal_epoch, global_step, causal_train_dataloader)
                 train_causal_iter = iter(causal_train_dataloader)
-                causal_input_ids, causal_attention_mask, causal_target_ids, mask_p = get_batch(train_causal_iter, args.device, global_step)
+                causal_input_ids, causal_attention_mask, causal_target_ids, mask_p = get_batch(train_causal_iter, args.device, global_step, True)
 
         num_masked = masked_input_ids.size(1)
         full_input_ids = torch.cat([masked_input_ids, causal_input_ids], dim=1)
@@ -541,8 +563,14 @@ def training(model, ema_model, masked_train_dataloader, causal_train_dataloader,
 
             # add the tracked metrics (for gradient accumulation)
             total_loss += loss.detach() * weight
-            total_masked_loss += masked_loss.detach() * weight
-            total_causal_loss += causal_loss.detach() * weight
+            if isinstance(masked_loss, torch.Tensor):
+                total_masked_loss += masked_loss.detach() * weight
+            else:
+                total_masked_loss += masked_loss * weight
+            if isinstance(causal_loss, torch.Tensor):
+                total_causal_loss += causal_loss.detach() * weight
+            else:
+                total_causal_loss += causal_loss * weight
             total_accuracy += accuracy * weight
             total_masked_accuracy += masked_accuracy * weight
             total_causal_accuracy += causal_accuracy * weight
@@ -560,7 +588,7 @@ def training(model, ema_model, masked_train_dataloader, causal_train_dataloader,
         with torch.no_grad():
 
             # EMA update
-            for param_q, param_k in zip(model.module.parameters(), ema_model.parameters()):
+            for param_q, param_k in zip(model.parameters(), ema_model.parameters()):
                 param_k.data.mul_(args.ema_decay).add_((1.0 - args.ema_decay) * param_q.detach().data)
 
         # log the metrics
@@ -580,9 +608,9 @@ def training(model, ema_model, masked_train_dataloader, causal_train_dataloader,
                     "stats/learning_rate": optimizer.param_groups[0]['lr'],
                     "stats/grad_norm": total_grad_norm,
                     "stats/seq_length": masked_train_dataloader.dataset.seq_length,
-                    "stats/global_batch_size": args.current_global_batch_size,
-                    "stats/local_batch_size": args.current_local_batch_size,
-                    "stats/accumulate_steps": args.accumulate_steps,
+                    "stats/global_batch_size": args.global_batch_size,
+                    "stats/local_batch_size": args.local_batch_size,
+                    "stats/accumulate_steps": args.batch_reduction,
                     "stats/mask_p": mask_p.item(),
                 },
                 commit=False
@@ -612,7 +640,7 @@ def training(model, ema_model, masked_train_dataloader, causal_train_dataloader,
 
         # Exiting the training due to hitting max steps
         if global_step >= args.max_steps:
-            return global_step
+            return global_step, masked_epoch, causal_epoch
 
     return global_step, masked_epoch, causal_epoch
 

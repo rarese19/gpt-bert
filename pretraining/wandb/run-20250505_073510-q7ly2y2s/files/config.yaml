@@ -1,0 +1,126 @@
+_wandb:
+    value:
+        cli_version: 0.19.10
+        m: []
+        python_version: 3.10.12
+        t:
+            "1":
+                - 1
+                - 55
+            "2":
+                - 1
+                - 55
+            "3":
+                - 13
+                - 23
+                - 55
+            "4": 3.10.12
+            "5": 0.19.10
+            "8":
+                - 5
+            "12": 0.19.10
+            "13": linux-x86_64
+attention_probs_dropout_prob:
+    value: 0.1
+batch_reduction:
+    value: 4
+checkpoint_filename:
+    value: null
+config_file:
+    value: ../configs/small.json
+cooldown_proportion:
+    value: 0.016
+device:
+    value: cuda
+ema_decay:
+    value: 0.999
+global_batch_size:
+    value: 256
+hidden_dropout_prob:
+    value: 0.1
+hidden_size:
+    value: 384
+hybrid_denominator:
+    value: 16
+hybrid_numerator:
+    value: 15
+intermediate_size:
+    value: 1280
+layer_norm_eps:
+    value: 1e-05
+learning_rate:
+    value: 0.01
+local_batch_size:
+    value: 256
+log_stats_every:
+    value: 100
+mask_keep_p:
+    value: 0.1
+mask_p_end:
+    value: 0.15
+mask_p_start:
+    value: 0.3
+mask_random_p:
+    value: 0.1
+max_gradient:
+    value: 2
+max_position_embeddings:
+    value: 512
+max_steps:
+    value: 15625
+mixed_precision:
+    value: true
+n_params:
+    value: 29892164
+n_special_tokens:
+    value: 16
+name:
+    value: small_15-16_babylm_10M_15_16
+num_attention_heads:
+    value: 6
+num_hidden_layers:
+    value: 12
+optimizer:
+    value: lamb
+optimizer_beta1:
+    value: 0.9
+optimizer_beta2:
+    value: 0.98
+optimizer_eps:
+    value: 1e-08
+output_dir:
+    value: ../model_checkpoints
+output_path:
+    value: ../model_checkpoints/small_15-16_babylm_10M_15_16.bin
+position_bucket_size:
+    value: 32
+save_every:
+    value: 1000
+seed:
+    value: 42
+seq_length:
+    value: 128
+token_weighted_loss:
+    value: false
+tokenizer_path:
+    value: ../tokenizers/tokenizer_10M.json
+train_path:
+    value: ../data/babycosmofine_10M_train_tokenized.bin
+valid_path:
+    value: ../data/babycosmofine_10M_validation_tokenized.bin
+validate_every:
+    value: 1000
+validation_steps:
+    value: 1
+vocab_size:
+    value: 8192
+wandb_entity:
+    value: rarese19-proiect
+wandb_project:
+    value: gpt-bert-sp-bpe
+warmup_proportion:
+    value: 0.016
+weight_decay:
+    value: 0.1
+z_loss_weight:
+    value: 0.0001

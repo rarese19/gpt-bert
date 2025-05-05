@@ -123,6 +123,9 @@ class MaskClassifier(nn.Module):
         self.nonlinearity[-1].bias.data.zero_()
 
     def forward(self, x, masked_lm_labels, num_masked=None):
+        if masked_lm_labels is None:
+            return self.nonlinearity(x)
+        
         if num_masked is None:
             x = torch.index_select(x.flatten(0, 1), 0, torch.nonzero(masked_lm_labels.flatten() != -100).squeeze())
             x = self.nonlinearity(x)
